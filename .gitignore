@@ -1,0 +1,14 @@
+# Friday device client runtime state
+friday/data/client-state.json
+friday/data/settings-cache.json
+# Node dependencies
+node_modules/
+# Build output
+build/
+# Environment variables (copy .env.example to .env locally)
+.env
+.env.local
+.env.production.local
+.env.development.local
+.env.test.local
+
