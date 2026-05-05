@@ -4,6 +4,27 @@
 @tailwind components;
 @tailwind utilities;
 
+@keyframes welcomeBar {
+  from { width: 0; }
+  to   { width: 220px; }
+}
+
+@keyframes welcomeFadeUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes welcomeSubtitle {
+  from { opacity: 0; transform: translateY(12px); letter-spacing: 0.15em; }
+  to   { opacity: 0.5; transform: translateY(0);  letter-spacing: 0.35em; }
+}
+
+@keyframes welcomeGlow {
+  0%   { text-shadow: 0 0 0px var(--mirror-accent-color); }
+  60%  { text-shadow: 0 0 40px var(--mirror-accent-color), 0 0 80px var(--mirror-accent-soft); }
+  100% { text-shadow: 0 0 20px var(--mirror-accent-color), 0 0 40px var(--mirror-accent-soft); }
+}
+
 :root {
   --mirror-accent-color: #38bdf8;
   --mirror-accent-soft: rgba(125, 211, 252, 0.4);

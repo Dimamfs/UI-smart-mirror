@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { getAppSettings } from '../data/apps';
 import useResponsiveFontScale from '../hooks/useResponsiveFontScale';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useProfile } from '../contexts/ProfileContext';
 
 // ── Weather code helpers ───────────────────────────────────────────────────
 
@@ -29,6 +30,11 @@ const WeatherApp = ({ appId = 'weather' }) => {
   const [settings, setSettings]       = useState(getAppSettings(appId));
   const containerRef                  = useRef(null);
   const { t }                         = useLanguage();
+  const { activeProfile }             = useProfile();
+
+  // Backend location takes precedence over local setting
+  const cityQuery = activeProfile?.location?.city || settings.location || 'Istanbul';
+  const units     = activeProfile?.preferences?.units || settings.units || 'celsius';
 
   const weatherDesc = (code) => t.weatherDesc[code] ?? '';
   const dayName = (dateStr) => {
@@ -51,19 +57,19 @@ const WeatherApp = ({ appId = 'weather' }) => {
   useEffect(() => { setSettings(getAppSettings(appId)); }, [appId]);
 
   useEffect(() => {
-    if (settings.location) fetchWeather();
-  }, [settings.location, settings.units]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (cityQuery) fetchWeather();
+  }, [cityQuery, units]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchWeather = async () => {
-    if (!settings.location) return;
+    if (!cityQuery) return;
 
-    console.log('[Weather] Selected location:', settings.location, '| Units:', settings.units);
+    console.log('[Weather] Location (backend→local fallback):', cityQuery, '| Units:', units);
     setLoading(true);
     setError('');
 
     try {
       const geoRes  = await fetch(
-        `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(settings.location)}&count=1&language=en&format=json`
+        `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cityQuery)}&count=1&language=en&format=json`
       );
       if (!geoRes.ok) throw new Error('Location lookup failed');
 
@@ -74,7 +80,7 @@ const WeatherApp = ({ appId = 'weather' }) => {
       const { latitude, longitude } = loc;
       console.log(`[Weather] Coordinates — lat: ${latitude}, lon: ${longitude} (${loc.name}, ${loc.country})`);
 
-      const unit = settings.units === 'celsius' ? 'celsius' : 'fahrenheit';
+      const unit = units === 'celsius' ? 'celsius' : 'fahrenheit';
       const weatherRes = await fetch(
         `https://api.open-meteo.com/v1/forecast` +
         `?latitude=${latitude}&longitude=${longitude}` +
@@ -116,11 +122,11 @@ const WeatherApp = ({ appId = 'weather' }) => {
 
   // ── Sizing ─────────────────────────────────────────────────────────────
   const s = (base) => Math.round(base * scale);
-  const unit = settings.units === 'celsius' ? '°C' : '°F';
+  const unit = units === 'celsius' ? '°C' : '°F';
 
   // ── States ─────────────────────────────────────────────────────────────
 
-  if (!settings.location) {
+  if (!cityQuery) {
     return (
       <div ref={containerRef} className="w-full h-full flex flex-col items-center justify-center text-white/40" style={{ fontSize: s(13) }}>
         <div style={{ fontSize: s(26), marginBottom: 8 }}>🌤</div>

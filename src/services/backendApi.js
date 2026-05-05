@@ -100,6 +100,97 @@ export const backendApi = {
       return null;
     }
   },
+
+  /**
+   * Tells the backend which profile is now active on this mirror.
+   * Called by the mirror when face recognition switches the active user.
+   * Body: { mirrorId, profileId }
+   */
+  setActiveMirrorUser: async (mirrorId, profileId) => {
+    try {
+      await fetch(`${API_URL}/api/mirrors/active-user`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mirrorId, profileId }),
+      });
+    } catch (e) {
+      console.warn('[Mirror] setActiveMirrorUser failed:', e.message);
+    }
+  },
+
+  /**
+   * Full profile fetch — same endpoint, richer normalized shape.
+   * Handles both legacy { id, name, gmailConnected } and the full
+   * { settings, integrations, location, preferences } backend shape.
+   * Returns a normalized activeProfile object or null.
+   */
+  getActiveProfile: async (mirrorId) => {
+    const url = `${API_URL}/api/mirrors/active-user/${mirrorId}`;
+    try {
+      console.log('[Profile] Polling:', url, '| mirrorId:', mirrorId);
+      const res = await fetch(url);
+      if (!res.ok) {
+        console.warn('[Profile] Poll failed — HTTP', res.status);
+        return null;
+      }
+      const data = await res.json();
+      const raw = data.profile || null;
+      console.log('[Profile] Raw response:', raw);
+
+      if (!raw) return null;
+
+      const normalized = backendApi._normalizeProfile(raw);
+      console.log('[Profile] Settings received:', normalized.settings);
+      console.log('[Profile] Integrations received:', normalized.integrations);
+      console.log('[Profile] Location received:', normalized.location);
+      return normalized;
+    } catch (err) {
+      console.warn('[Profile] Poll error:', err.message);
+      return null;
+    }
+  },
+
+  // Normalizes both legacy and full backend profile shapes into one structure
+  _normalizeProfile: (raw) => {
+    const defaults = {
+      settings: { datetime: true, weather: true, news: true, gmail: false, spotify: false },
+      integrations: { gmail: { connected: false, email: null }, spotify: { connected: false } },
+      location: { city: 'Istanbul', country: null, lat: null, lon: null },
+      preferences: { units: 'celsius', newsSources: ['bbc', 'trt'], language: 'en' },
+    };
+
+    const gmailConnected = !!(
+      raw.integrations?.gmail?.connected ?? raw.gmailConnected ?? false
+    );
+    const gmailEmail = raw.integrations?.gmail?.email || raw.gmailEmail || null;
+    const spotifyConnected = !!(raw.integrations?.spotify?.connected ?? raw.spotifyConnected ?? false);
+
+    return {
+      profileId:  raw.id,
+      name:       raw.name || null,
+      settings: {
+        ...defaults.settings,
+        ...(raw.settings || {}),
+        gmail:   gmailConnected,
+        spotify: spotifyConnected,
+      },
+      integrations: {
+        gmail:   { connected: gmailConnected, email: gmailEmail },
+        spotify: { connected: spotifyConnected },
+      },
+      location: {
+        city:    raw.location?.city    || defaults.location.city,
+        country: raw.location?.country || null,
+        lat:     raw.location?.lat     || null,
+        lon:     raw.location?.lon     || null,
+      },
+      preferences: {
+        units:       raw.preferences?.units       || defaults.preferences.units,
+        newsSources: raw.preferences?.newsSources || defaults.preferences.newsSources,
+        language:    raw.preferences?.language    || defaults.preferences.language,
+      },
+    };
+  },
 };
 
 // Map backend profile shape → mirror profile shape

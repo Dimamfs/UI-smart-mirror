@@ -8,7 +8,10 @@ import { apps, getAppSettings } from '../data/apps';
 import { getGeneralSettings, getAccentOption, getFontOption } from '../data/generalSettings';
 import { useAIAssistant } from '../hooks/useAIAssistant';
 import useActiveUser from '../hooks/useActiveUser';
+import useFaceEnrollment from '../hooks/useFaceEnrollment';
 import { findUserByFace, saveFaceDescriptor, getUsers, setActiveUser } from '../data/users';
+import { useProfile } from '../contexts/ProfileContext';
+import { backendApi } from '../services/backendApi';
 
 // Import all app components
 import DateTimeApp from '../apps/DateTimeApp';
@@ -44,8 +47,14 @@ const SmartMirror = () => {
   // ── AI assistant (new unified hook) ──────────────────────────────────────
   const assistant = useAIAssistant();
 
+  // ── Central profile state (backend → settings/integrations/location) ──────
+  const { activeProfile } = useProfile();
+
   // ── Active user (synced from phone via backend polling) ───────────────────
   const { activeUser } = useActiveUser();
+
+  // ── Face enrollment — loads backend face photos → computes descriptors ────
+  useFaceEnrollment();
 
   // ── Mirror UI state ───────────────────────────────────────────────────────
   const [enabledApps, setEnabledApps] = useState([]);
@@ -78,6 +87,19 @@ const SmartMirror = () => {
   const sleepWakeTimerRef = useRef(null);
   const sleepWakeLastPositionRef = useRef(null);
   const [sleepWakeCursorVisible, setSleepWakeCursorVisible] = useState(false);
+
+  // ── Welcome screen — only once per browser session ───────────────────────
+  const alreadySeen = sessionStorage.getItem('sm_welcomed') === '1';
+  const [welcomeVisible, setWelcomeVisible] = useState(!alreadySeen);
+  const [welcomeFadingOut, setWelcomeFadingOut] = useState(false);
+
+  useEffect(() => {
+    if (alreadySeen) return;
+    sessionStorage.setItem('sm_welcomed', '1');
+    const fadeTimer = setTimeout(() => setWelcomeFadingOut(true), 2500);
+    const hideTimer = setTimeout(() => setWelcomeVisible(false), 3200);
+    return () => { clearTimeout(fadeTimer); clearTimeout(hideTimer); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Face recognition state ────────────────────────────────────────────────
   // lockedFaceUser: the user currently locked in via face recognition (null = no face seen yet)
@@ -316,53 +338,59 @@ const SmartMirror = () => {
     }
   }, [sleepState]);
 
+  // ── Widget list — local settings always win; backend adds integration widgets ─
   useEffect(() => {
-    // Get enabled apps that are not background services
-    const getVisibleApps = () => {
-      const settings = JSON.parse(localStorage.getItem('smartMirrorSettings') || '{}');
-      return apps.filter(app =>
-        !app.isBackgroundService && // Filter out background services
-        settings[app.id]?.enabled !== false
-      );
-    };
+    const evaluateWidgets = () => {
+      const { profileId, integrations } = activeProfile;
+      const hasBackend = profileId !== null;
 
-    setEnabledApps(getVisibleApps());
+      const localSettings = JSON.parse(localStorage.getItem('smartMirrorSettings') || '{}');
+      // An app is locally enabled when its enabled flag is absent (never set) or true
+      const localEnabled = (appId) => localSettings[appId]?.enabled !== false;
 
-    // Check if hand tracking is enabled
-    const handTrackingSettings = getAppSettings('handtracking');
-    handTrackingSettingsRef.current = handTrackingSettings;
+      const visible = apps.filter(app => {
+        if (app.isBackgroundService) return false;
 
-    // TEMPORARY: Force enable hand tracking for debugging
-    const forceEnabled = true; // Set this to false when done debugging
-    const htEnabled = forceEnabled || handTrackingSettings.enabled || false;
-    setHandTrackingEnabled(htEnabled);
-    if (htEnabled) setFaceStatus('scanning');
-    setGeneralSettings(getGeneralSettings());
+        // Gmail & Spotify: show if locally enabled OR backend integration is connected
+        if (app.id === 'gmail') {
+          return localEnabled('gmail') || (hasBackend && integrations.gmail.connected);
+        }
+        if (app.id === 'spotify') {
+          return localEnabled('spotify') || (hasBackend && integrations.spotify.connected);
+        }
 
-    // Listen for settings changes
-    const handleStorageChange = () => {
-      setEnabledApps(getVisibleApps());
-      const updatedHandTrackingSettings = getAppSettings('handtracking');
-      handTrackingSettingsRef.current = updatedHandTrackingSettings;
-      setHandTrackingEnabled(updatedHandTrackingSettings.enabled || false);
-      if (updatedHandTrackingSettings.enabled) setFaceStatus('scanning');
+        // All other widgets: local setting controls, backend setting can override off→on
+        return localEnabled(app.id);
+      });
+
+      console.log('[SmartMirror] Widget visibility (backend:', hasBackend, '):', {
+        datetime: localEnabled('datetime'),
+        weather:  localEnabled('weather'),
+        news:     localEnabled('news'),
+        gmail:    localEnabled('gmail') || (hasBackend && integrations.gmail.connected),
+        spotify:  localEnabled('spotify') || (hasBackend && integrations.spotify.connected),
+      });
+
+      setEnabledApps(visible);
       setGeneralSettings(getGeneralSettings());
+
+      const htSettings = getAppSettings('handtracking');
+      handTrackingSettingsRef.current = htSettings;
+      const htEnabled = true || htSettings.enabled || false;
+      setHandTrackingEnabled(htEnabled);
+      if (htEnabled) setFaceStatus('scanning');
     };
 
-    window.addEventListener('storage', handleStorageChange);
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      clearDragState();
-    };
-  }, [clearDragState]);
+    evaluateWidgets();
+    // Re-evaluate whenever Settings page saves a change
+    window.addEventListener('storage', evaluateWidgets);
+    return () => window.removeEventListener('storage', evaluateWidgets);
+  }, [activeProfile]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleFaceDetected = useCallback((faceResult) => {
     if (!faceResult) {
-      // No face in this frame
       faceMissCountRef.current += 1;
       if (faceMissCountRef.current >= FACE_MISS_THRESHOLD) {
-        // Face has been absent long enough — allow a new face to take over
-        // but do NOT clear the locked user (per spec: user stays until DIFFERENT face appears)
         setFaceStatus('scanning');
       }
       return;
@@ -375,30 +403,36 @@ const SmartMirror = () => {
     if (match) {
       const { user } = match;
       if (!user) return;
-      // Only switch if a different user is detected
+
       if (lockedFaceUserRef.current?.id !== user.id) {
         lockedFaceUserRef.current = user;
         setLockedFaceUser(user);
         setActiveUser(user.id);
+
+        // Notify the backend so settings sync picks up this user
+        if (user.backendId) {
+          const mirrorId = backendApi.getMirrorId();
+          backendApi.setActiveMirrorUser(mirrorId, user.backendId);
+          console.log('[Mirror] Face recognised — switched to:', user.name);
+        }
       }
       setFaceStatus('recognized');
     } else {
-      // Unknown face — check if we should register it for a known profile without descriptor
+      // Only auto-enroll local (non-phone) profiles that have no descriptor yet
       const { profiles } = getUsers();
       const unregistered = profiles.find(p => {
+        if (p.source === 'phone') return false; // phone profiles enroll via the app
         const stored = JSON.parse(localStorage.getItem('smartMirrorSettings') || '{}');
         return !stored.faceDescriptors?.[p.id];
       });
 
       if (unregistered && !lockedFaceUserRef.current) {
-        // Auto-enroll the first unregistered profile with this face
         saveFaceDescriptor(unregistered.id, descriptor);
         lockedFaceUserRef.current = unregistered;
         setLockedFaceUser(unregistered);
         setActiveUser(unregistered.id);
         setFaceStatus('recognized');
       } else {
-        // Truly unknown — a different face appeared, clear the lock
         if (lockedFaceUserRef.current?.id !== 'unknown') {
           lockedFaceUserRef.current = { id: 'unknown', name: 'Unknown' };
           setLockedFaceUser({ id: 'unknown', name: 'Unknown' });
@@ -737,6 +771,51 @@ const SmartMirror = () => {
 
   return (
     <div ref={containerRef} className="w-screen h-screen bg-black overflow-hidden relative" onClick={() => setActiveWidgetId(null)}>
+
+      {/* Welcome splash screen */}
+      {welcomeVisible && (
+        <div
+          className="absolute inset-0 z-[2000] flex flex-col items-center justify-center bg-black pointer-events-none"
+          style={{
+            opacity: welcomeFadingOut ? 0 : 1,
+            transition: 'opacity 0.9s cubic-bezier(0.4, 0, 0.2, 1)'
+          }}
+        >
+          <div className="flex flex-col items-center gap-4">
+            {/* "Welcome To" — fades up with letter-spacing expand */}
+            <p
+              className="text-white uppercase text-sm font-light"
+              style={{
+                animation: 'welcomeSubtitle 1s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both'
+              }}
+            >
+              Welcome To
+            </p>
+
+            {/* "SmartMirror" — fades up then glows */}
+            <h1
+              className="text-7xl font-bold tracking-tight"
+              style={{
+                color: 'var(--mirror-accent-color, #ffffff)',
+                animation: 'welcomeFadeUp 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.3s both, welcomeGlow 1.8s ease-out 0.9s both'
+              }}
+            >
+              SmartMirror
+            </h1>
+
+            {/* Expanding accent line */}
+            <div
+              className="h-px w-0 mt-1"
+              style={{
+                backgroundColor: 'var(--mirror-accent-color, #ffffff)',
+                opacity: 0.45,
+                animation: 'welcomeBar 1s cubic-bezier(0.22, 1, 0.36, 1) 0.7s forwards'
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       <div
         className="absolute inset-0 z-[1100] bg-black transition-opacity duration-500"
         style={{

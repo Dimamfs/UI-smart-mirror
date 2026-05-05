@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { getAppSettings } from '../data/apps';
 import useResponsiveFontScale from '../hooks/useResponsiveFontScale';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useProfile } from '../contexts/ProfileContext';
 
 // ── News source registry ───────────────────────────────────────────────────
 
@@ -131,6 +132,7 @@ const NewsApp = ({ appId = 'news' }) => {
   const [error, setError]     = useState('');
   const containerRef          = useRef(null);
   const { t }                 = useLanguage();
+  const { activeProfile }     = useProfile();
 
   const scale = useResponsiveFontScale(containerRef, {
     baseWidth: 320,
@@ -140,11 +142,16 @@ const NewsApp = ({ appId = 'news' }) => {
   });
 
   const fetchNews = useCallback(async () => {
-    const s        = getAppSettings(appId);
-    const sources  = Array.isArray(s.sources) && s.sources.length > 0
-      ? s.sources
-      : DEFAULT_SOURCES;
+    const s = getAppSettings(appId);
+    // Backend preference takes precedence over local setting
+    const profileSources = activeProfile?.preferences?.newsSources;
+    const sources = Array.isArray(profileSources) && profileSources.length > 0
+      ? profileSources
+      : Array.isArray(s.sources) && s.sources.length > 0
+        ? s.sources
+        : DEFAULT_SOURCES;
     const maxItems = s.maxItems || 8;
+    console.log('[News] Sources (backend→local fallback):', sources);
 
     setLoading(true);
     setError('');
@@ -159,14 +166,14 @@ const NewsApp = ({ appId = 'news' }) => {
     } finally {
       setLoading(false);
     }
-  }, [appId]);
+  }, [appId, activeProfile?.preferences?.newsSources]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     fetchNews();
     const s        = getAppSettings(appId);
     const interval = setInterval(fetchNews, s.refreshInterval || 300000);
     return () => clearInterval(interval);
-  }, [appId, fetchNews]);
+  }, [fetchNews]);
 
   // ── Formatting ─────────────────────────────────────────────────────────
   const formatTimeAgo = (ts) => {
