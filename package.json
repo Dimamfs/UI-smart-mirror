@@ -12,6 +12,8 @@
     "@testing-library/react": "^13.4.0",
     "@testing-library/user-event": "^13.5.0",
     "framer-motion": "^10.12.4",
+    "libsodium-wrappers": "^0.7.16",
+    "qrcode": "^1.5.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-draggable": "^4.4.5",
@@ -20,18 +22,30 @@
     "react-scripts": "5.0.1",
     "three": "^0.180.0",
     "uuid": "^9.0.1",
-    "web-vitals": "^2.1.4"
+    "web-vitals": "^2.1.4",
+    "ws": "^8.20.1"
   },
   "devDependencies": {
+    "@types/libsodium-wrappers": "^0.7.14",
+    "@types/node": "^20.19.41",
+    "@types/qrcode": "^1.5.6",
+    "@types/ws": "^8.18.1",
     "autoprefixer": "^10.4.14",
+    "cross-env": "^10.1.0",
     "postcss": "^8.4.23",
-    "tailwindcss": "^3.3.2"
+    "tailwindcss": "^3.3.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
   },
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "sync:dev": "cross-env MIRROR_BACKEND_URL=ws://localhost:4000 ts-node --project tsconfig.sync.json sync/server.ts",
+    "sync:build": "tsc --project tsconfig.sync.json",
+    "sync:start": "node sync/dist/server.js",
+    "mock-backend": "ts-node --project tsconfig.sync.json sync/mock-backend.ts"
   },
   "eslintConfig": {
     "extends": [

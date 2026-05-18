@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import { DeviceAccountButton } from '../components/PairingScreen';
 import { apps, saveAppSettings, toggleAppEnabled } from '../data/apps';
 import { getUsers, setActiveUser, migrateUsersIfNeeded } from '../data/users';
 import { backendApi } from '../services/backendApi';
@@ -1260,6 +1261,14 @@ const Settings = () => {
           </div>
         </div>
 
+        {/* Device pairing section */}
+        <div className="mt-8 rounded-xl border border-white/10 bg-white/5 p-6">
+          <h2 className="mb-1 text-sm font-semibold text-white">Device &amp; account</h2>
+          <p className="mb-4 text-xs text-gray-400">
+            Unlink this mirror or exit guest mode to return to the pairing screen.
+          </p>
+          <DeviceAccountButton />
+        </div>
 
       </div>
     </div>

@@ -29,9 +29,9 @@ export function applyBackendSettings(settings) {
   if (w.spotify !== undefined) {
     stored.spotify = { ...stored.spotify, enabled: w.spotify };
   }
-  if (w.gesture !== undefined) {
-    stored.handtracking = { ...stored.handtracking, enabled: w.gesture };
-  }
+  // NOTE: w.gesture controls gesture-UI interaction (cursor/pinch), NOT the camera stream.
+  // The camera must stay on for face recognition regardless of this toggle, so we do NOT
+  // write handtracking.enabled here. HandTrackingService is always enabled on the mirror.
 
   // ── Weather location (settings.location.*) ────────────────────────────────
   const loc = settings.location || {};
@@ -99,5 +99,6 @@ export function applyBackendSettings(settings) {
     widgets: w,
     location: loc.city,
     units: loc.units,
+    note: 'camera/handtracking enabled state is NOT overwritten — always on for face recognition',
   });
 }

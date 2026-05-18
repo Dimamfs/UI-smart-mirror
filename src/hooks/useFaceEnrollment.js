@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { saveFaceDescriptor, getFaceDescriptors, getUsers, saveProfiles } from '../data/users';
+import { saveFaceDescriptors, getFaceDescriptors, getUsers, saveProfiles } from '../data/users';
 import { backendApi } from '../services/backendApi';
 
 const FACE_MODEL_URL =
@@ -68,12 +68,18 @@ function ensureProfileInUserList(backendId, name) {
   console.log('[FaceEnroll] Added user to mirror list:', name, mirrorId);
 }
 
+// Stable cache key: sorted filenames joined — changes only when the set of
+// uploaded pose images changes.
+function filesCacheKey(filenames) {
+  return [...filenames].sort().join(',');
+}
+
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 const useFaceEnrollment = () => {
   const modelsReadyRef   = useRef(false);
-  // Track which face_filename has already been enrolled to detect re-uploads.
-  const enrolledFilesRef = useRef({});   // { 'phone-1': 'profile_1_xyz.jpg' }
+  // Track which set of filenames has already been enrolled per user.
+  const enrolledFilesRef = useRef({});   // { 'phone-1': 'file1.jpg,file2.jpg,file3.jpg' }
 
   useEffect(() => {
     const mirrorId = backendApi.getMirrorId();
@@ -104,27 +110,50 @@ const useFaceEnrollment = () => {
       const existingDescriptors = getFaceDescriptors();
 
       for (const p of profiles) {
-        if (!p.face_filename) continue;
+        // Prefer the multi-pose array; fall back to legacy single filename
+        let filenames = [];
+        if (p.face_filenames) {
+          try { filenames = JSON.parse(p.face_filenames); } catch { filenames = []; }
+        }
+        if (filenames.length === 0 && p.face_filename) {
+          filenames = [p.face_filename];
+        }
+        if (filenames.length === 0) continue;
 
         const mirrorUserId = `phone-${p.id}`;
+        const cacheKey = filesCacheKey(filenames);
         const alreadyEnrolled =
-          enrolledFilesRef.current[mirrorUserId] === p.face_filename &&
+          enrolledFilesRef.current[mirrorUserId] === cacheKey &&
           existingDescriptors[mirrorUserId];
 
         if (alreadyEnrolled) continue;
 
-        console.log(`[FaceEnroll] Computing descriptor for ${p.name} (${p.face_filename})`);
-        const faceUrl = `http://127.0.0.1:3000/faces/${p.face_filename}`;
-        const descriptor = await descriptorFromUrl(faceUrl);
+        console.log(`[FaceEnroll] Processing ${filenames.length} pose(s) for ${p.name}`);
 
-        if (descriptor) {
-          saveFaceDescriptor(mirrorUserId, descriptor);
-          enrolledFilesRef.current[mirrorUserId] = p.face_filename;
-          ensureProfileInUserList(p.id, p.name);
-          console.log(`[FaceEnroll] Enrolled: ${p.name}`);
-        } else {
-          console.warn(`[FaceEnroll] No face detected in photo for ${p.name}`);
+        // Compute descriptor for each pose image
+        const descriptors = [];
+        for (const filename of filenames) {
+          const faceUrl = `http://127.0.0.1:3000/faces/${filename}`;
+          const descriptor = await descriptorFromUrl(faceUrl);
+          if (descriptor) {
+            descriptors.push(descriptor);
+            console.log(`[FaceEnroll] ✓ ${filename}`);
+          } else {
+            console.warn(`[FaceEnroll] ✗ no face in ${filename}`);
+          }
         }
+
+        if (descriptors.length === 0) {
+          console.warn(`[FaceEnroll] No face detected in any photo for ${p.name}`);
+          continue;
+        }
+
+        saveFaceDescriptors(mirrorUserId, descriptors);
+        enrolledFilesRef.current[mirrorUserId] = cacheKey;
+        ensureProfileInUserList(p.id, p.name);
+        console.log(
+          `[FaceEnroll] Enrolled: ${p.name} — ${descriptors.length}/${filenames.length} poses matched`
+        );
       }
     };
 

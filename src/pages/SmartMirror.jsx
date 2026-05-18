@@ -61,7 +61,7 @@ const SmartMirror = () => {
   const [generalSettings, setGeneralSettings] = useState(() => getGeneralSettings());
   const containerRef = useRef(null);
   const [cursorPosition, setCursorPosition] = useState({ x: 0, y: 0, detected: false });
-  const [handTrackingEnabled, setHandTrackingEnabled] = useState(false);
+  const [handTrackingEnabled, setHandTrackingEnabled] = useState(true); // start true — camera needed for face recognition from first frame
   const [isDragging, setIsDragging] = useState(false);
   const [dragTarget, setDragTarget] = useState(null);
   const dragTargetRef = useRef(null);
@@ -107,6 +107,9 @@ const SmartMirror = () => {
   const [lockedFaceUser, setLockedFaceUser] = useState(null);
   const [faceStatus, setFaceStatus] = useState('idle');
   const lockedFaceUserRef = useRef(null);
+  // Throttle: epoch ms of last unknown-face alert sent (null = never)
+  const lastUnknownAlertRef = useRef(null);
+  const UNKNOWN_ALERT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
   // Tracks how many consecutive null-detection frames before we consider the face "gone"
   const faceMissCountRef = useRef(0);
   const FACE_MISS_THRESHOLD = 4; // ~6 seconds at 1.5s interval before considering face left
@@ -377,6 +380,7 @@ const SmartMirror = () => {
       const htSettings = getAppSettings('handtracking');
       handTrackingSettingsRef.current = htSettings;
       const htEnabled = true || htSettings.enabled || false;
+      console.log('[Camera] evaluateWidgets: handTrackingEnabled=', htEnabled, '(localStorage gesture enabled:', htSettings.enabled, ')');
       setHandTrackingEnabled(htEnabled);
       if (htEnabled) setFaceStatus('scanning');
     };
@@ -436,6 +440,18 @@ const SmartMirror = () => {
         if (lockedFaceUserRef.current?.id !== 'unknown') {
           lockedFaceUserRef.current = { id: 'unknown', name: 'Unknown' };
           setLockedFaceUser({ id: 'unknown', name: 'Unknown' });
+
+          // Send alert — throttled to once per 5 minutes
+          const now = Date.now();
+          if (!lastUnknownAlertRef.current || now - lastUnknownAlertRef.current > UNKNOWN_ALERT_COOLDOWN_MS) {
+            lastUnknownAlertRef.current = now;
+            const mirrorId = backendApi.getMirrorId();
+            if (mirrorId) {
+              fetch(`http://127.0.0.1:3001/api/mirrors/${mirrorId}/unknown-face`, { method: 'POST' })
+                .then(() => console.log('[Mirror] Unknown-face alert sent'))
+                .catch((e) => console.warn('[Mirror] Alert send failed:', e.message));
+            }
+          }
         }
         setFaceStatus('unknown');
       }

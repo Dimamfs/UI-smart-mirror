@@ -39,7 +39,7 @@ const CursorOverlay = ({ position, isVisible, isDragging = false, variant = 'def
         left: position.x - centerOffset,
         top: position.y - centerOffset,
         transition: isDragging ? 'none' : 'left 0.1s ease-out, top 0.1s ease-out',
-        zIndex: 9999, // Always on top
+        zIndex: 10000, // Above PairingScreen (z-9999) and everything else
       }}
     >
       {/* Outer glow ring */}

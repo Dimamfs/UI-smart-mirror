@@ -122,11 +122,22 @@ export const saveProfiles = (profiles) => {
 
 const FACE_KEY = 'faceDescriptors';
 
-/** Persists a 128-dim face descriptor array for a user (call after enrollment). */
+/** Persists a single 128-dim face descriptor for a user. */
 export const saveFaceDescriptor = (userId, descriptor) => {
   const root = readRaw();
   if (!root[FACE_KEY]) root[FACE_KEY] = {};
-  root[FACE_KEY][userId] = Array.from(descriptor);
+  root[FACE_KEY][userId] = [Array.from(descriptor)]; // always wrap in array
+  writeRaw(root);
+};
+
+/**
+ * Persists multiple 128-dim face descriptors for a user (multi-pose enrollment).
+ * Replaces any previously stored descriptors for this user.
+ */
+export const saveFaceDescriptors = (userId, descriptors) => {
+  const root = readRaw();
+  if (!root[FACE_KEY]) root[FACE_KEY] = {};
+  root[FACE_KEY][userId] = descriptors.map(d => Array.from(d));
   writeRaw(root);
 };
 
@@ -147,6 +158,7 @@ export const removeFaceDescriptor = (userId) => {
 
 /**
  * Finds the best-matching user for a given descriptor using Euclidean distance.
+ * Handles both single-descriptor (legacy number[]) and multi-descriptor (number[][]) storage.
  * Returns { user, distance } or null if no stored descriptors are below threshold.
  * Default threshold of 0.55 works well for face-api.js faceRecognitionNet.
  */
@@ -156,17 +168,25 @@ export const findUserByFace = (descriptor, threshold = 0.55) => {
   let bestUser = null;
   let bestDistance = Infinity;
 
-  for (const [userId, storedDesc] of Object.entries(stored)) {
-    if (!Array.isArray(storedDesc) || storedDesc.length !== descriptor.length) continue;
-    let sum = 0;
-    for (let i = 0; i < descriptor.length; i++) {
-      const diff = descriptor[i] - storedDesc[i];
-      sum += diff * diff;
-    }
-    const dist = Math.sqrt(sum);
-    if (dist < bestDistance) {
-      bestDistance = dist;
-      bestUser = profiles.find(p => p.id === userId) || null;
+  for (const [userId, storedEntry] of Object.entries(stored)) {
+    if (!Array.isArray(storedEntry)) continue;
+    // Normalize: stored as [[...], [...]] (new) or [...] (legacy single)
+    const descriptorList = Array.isArray(storedEntry[0])
+      ? storedEntry
+      : [storedEntry];
+
+    for (const storedDesc of descriptorList) {
+      if (!Array.isArray(storedDesc) || storedDesc.length !== descriptor.length) continue;
+      let sum = 0;
+      for (let i = 0; i < descriptor.length; i++) {
+        const diff = descriptor[i] - storedDesc[i];
+        sum += diff * diff;
+      }
+      const dist = Math.sqrt(sum);
+      if (dist < bestDistance) {
+        bestDistance = dist;
+        bestUser = profiles.find(p => p.id === userId) || null;
+      }
     }
   }
 

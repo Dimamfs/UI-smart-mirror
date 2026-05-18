@@ -40,7 +40,7 @@ const HandTrackingService = ({ onHandPosition, onFaceDetected, settings = {}, en
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const [hands, setHands] = useState(null); // eslint-disable-line no-unused-vars
-  const [camera, setCamera] = useState(null);
+  const cameraRef = useRef(null); // useRef avoids stale-closure bug in effect cleanup
   const [isEnabled, setIsEnabled] = useState(enabled ?? settings.enabled ?? false);
   const [showPreview, setShowPreview] = useState(settings.showPreview || false);
   const [previewPosition, setPreviewPosition] = useState({ x: 16, y: 16 }); // Default position (top-4 left-4 = 16px)
@@ -172,9 +172,10 @@ const HandTrackingService = ({ onHandPosition, onFaceDetected, settings = {}, en
   useEffect(() => {
     if (!isEnabled) {
       // Clean up when disabled
-      if (camera) {
-        camera.stop();
-        setCamera(null);
+      console.log('[Camera] isEnabled=false — stopping camera');
+      if (cameraRef.current) {
+        cameraRef.current.stop();
+        cameraRef.current = null;
       }
       smoothedPositionRef.current = null;
       isProcessingFrameRef.current = false;
@@ -249,19 +250,27 @@ const HandTrackingService = ({ onHandPosition, onFaceDetected, settings = {}, en
             height: runtimeConfig.camera.height
           });
 
-          await cameraInstance.start();
-          setCamera(cameraInstance);
+          console.log('[Camera] Requesting getUserMedia via MediaPipe Camera...');
+          try {
+            await cameraInstance.start();
+            cameraRef.current = cameraInstance;
+            console.log('[Camera] Camera started successfully');
+          } catch (camErr) {
+            console.error('[Camera] camera.start() / getUserMedia failed:', camErr?.name, camErr?.message);
+          }
         }
       } catch (error) {
-        console.error('Error initializing hand tracking:', error);
+        console.error('[Camera] Error initializing hand tracking:', error);
       }
     };
 
     initializeHandTracking();
 
     return () => {
-      if (camera) {
-        camera.stop();
+      console.log('[Camera] Effect cleanup — stopping camera (preprocessingQuality or isEnabled changed)');
+      if (cameraRef.current) {
+        cameraRef.current.stop();
+        cameraRef.current = null;
       }
     };
   }, [isEnabled, settings.preprocessingQuality]); // eslint-disable-line react-hooks/exhaustive-deps
