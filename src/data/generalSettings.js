@@ -83,9 +83,10 @@ const DEFAULT_SETTINGS = {
   accent: ACCENT_OPTIONS[0].id,
   font: FONT_OPTIONS[0].id,
   language: 'en',
-  widgetBorders: true,
-  widgetShadows: true,
-  widgetHoverHighlight: true,
+  widgetBorders: false,
+  widgetShadows: false,
+  widgetHoverHighlight: false,
+  faceRecognitionEnabled: false,
   mirrorTimeoutEnabled: false,
   mirrorTimeoutMinutes: 5
 };

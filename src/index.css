@@ -61,6 +61,7 @@ body {
   position: absolute;
   cursor: move;
   user-select: none;
+  transform: translateZ(0);
 }
 
 .draggable-app:hover {
@@ -95,7 +96,6 @@ body {
     inset 0 0 60px rgba(255, 255, 255, var(--pulse-inner-alpha)),
     0 0 40px rgba(59, 130, 246, var(--pulse-glow-alpha));
   transition: transform 120ms ease-out, box-shadow 180ms ease-out;
-  backdrop-filter: blur(4px);
   will-change: transform;
 }
 

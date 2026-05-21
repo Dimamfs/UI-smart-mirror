@@ -52,8 +52,7 @@ export default function PairingScreen() {
         style={{
           border: '1px solid rgba(255,255,255,0.07)',
           borderRadius: '20px',
-          background: 'rgba(255,255,255,0.025)',
-          backdropFilter: 'blur(32px)',
+          background: 'rgba(15,15,15,0.95)',
         }}
       >
         {/* Left — QR sign-in */}

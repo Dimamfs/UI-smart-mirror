@@ -4,7 +4,7 @@ const Ctx = createContext({ guestMode: false, enterGuest: () => {}, exitGuest: (
 
 export function GuestModeProvider({ children }) {
   const [guestMode, setGuestMode] = useState(
-    () => localStorage.getItem('sm_guest_mode') === 'true'
+    () => localStorage.getItem('sm_guest_mode') !== 'false'
   );
 
   const enterGuest = () => {

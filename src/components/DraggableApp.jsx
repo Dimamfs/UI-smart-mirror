@@ -153,7 +153,8 @@ const DraggableApp = ({
         height: (isExternallyResized && externalSize) ? externalSize.height : size.height,
         zIndex: (isExternallyDragged || isExternallyResized || isDragging || isResizing) ? 1000 : 'auto',
         transition: (isExternallyDragged || isExternallyResized) ? 'none' : undefined,
-        willChange: isExternallyDragged ? 'left, top' : isExternallyResized ? 'width, height' : undefined
+        willChange: isExternallyDragged ? 'transform' : isExternallyResized ? 'width, height' : undefined,
+        contain: 'layout style'
       }}
       onMouseDown={handleMouseDown}
       onMouseEnter={() => hoverHighlightEnabled && setIsHovered(true)}

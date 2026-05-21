@@ -63,6 +63,8 @@ const SmartMirror = () => {
   // ── Mirror UI state ───────────────────────────────────────────────────────
   const [enabledApps, setEnabledApps] = useState([]);
   const [generalSettings, setGeneralSettings] = useState(() => getGeneralSettings());
+  // Ref mirrors generalSettings so callbacks read latest value without being re-created
+  const generalSettingsRef = useRef(generalSettings);
   const containerRef = useRef(null);
   const cursorPositionRef  = useRef({ x: 0, y: 0, detected: false });
   const cursorDetectedRef  = useRef(false);
@@ -125,6 +127,10 @@ const SmartMirror = () => {
   useEffect(() => {
     sleepStateRef.current = sleepState;
   }, [sleepState]);
+
+  useEffect(() => {
+    generalSettingsRef.current = generalSettings;
+  }, [generalSettings]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -381,10 +387,10 @@ const SmartMirror = () => {
 
       const htSettings = getAppSettings('handtracking');
       handTrackingSettingsRef.current = htSettings;
-      const htEnabled = true || htSettings.enabled || false;
-      console.log('[Camera] evaluateWidgets: handTrackingEnabled=', htEnabled, '(localStorage gesture enabled:', htSettings.enabled, ')');
+      const htEnabled = htSettings.enabled !== false;
       setHandTrackingEnabled(htEnabled);
-      if (htEnabled) setFaceStatus('scanning');
+      const s = getGeneralSettings();
+      if (htEnabled && s.faceRecognitionEnabled) setFaceStatus('scanning');
     };
 
     evaluateWidgets();
@@ -548,7 +554,7 @@ const SmartMirror = () => {
             position.y <= rect.bottom;
 
           if (isUnderCursor) {
-            const zIndex = parseInt(window.getComputedStyle(app).zIndex) || 0;
+            const zIndex = parseInt(app.style.zIndex) || 0;
             if (zIndex >= highestZIndex) {
               highestZIndex = zIndex;
               targetAppId = app.dataset.appId;
@@ -578,7 +584,7 @@ const SmartMirror = () => {
         const under = position.x >= rect.left && position.x <= rect.right &&
                       position.y >= rect.top  && position.y <= rect.bottom;
         if (under) {
-          const zIndex = parseInt(window.getComputedStyle(app).zIndex) || 0;
+          const zIndex = parseInt(app.style.zIndex) || 0;
           if (zIndex >= highestZIndex) {
             highestZIndex = zIndex;
             targetApp = app;
@@ -658,19 +664,20 @@ const SmartMirror = () => {
       }
     }
 
-    // ── Continue active resize ───────────────────────────────────────────────
+    // ── Continue active resize — DOM only during drag, React state only on release ──
     if (isPinchingNow && resizeTargetRef.current) {
       const cur = resizeTargetRef.current;
       const newWidth  = Math.max(150, Math.min(window.innerWidth  - cur.rectLeft, cur.initialWidth  + (position.x - cur.startX)));
       const newHeight = Math.max(100, Math.min(window.innerHeight - cur.rectTop,  cur.initialHeight + (position.y - cur.startY)));
-      setAppSizes(prev => ({ ...prev, [cur.appId]: { width: newWidth, height: newHeight } }));
       if (cur.element) {
         cur.element.style.width  = `${newWidth}px`;
         cur.element.style.height = `${newHeight}px`;
       }
+      cur._lastWidth  = newWidth;
+      cur._lastHeight = newHeight;
     }
 
-    // ── Continue active drag ─────────────────────────────────────────────────
+    // ── Continue active drag — DOM only during drag, React state only on release ──
     if (isPinchingNow && dragTargetRef.current) {
       const cur = dragTargetRef.current;
       const containerRect  = containerRef.current?.getBoundingClientRect();
@@ -678,31 +685,40 @@ const SmartMirror = () => {
       const containerHeight = containerRect?.height || window.innerHeight;
       const newLeft = Math.max(0, Math.min(containerWidth  - (cur.element?.offsetWidth  || 300), cur.initialPosition.x + (position.x - cur.startX)));
       const newTop  = Math.max(0, Math.min(containerHeight - (cur.element?.offsetHeight || 200), cur.initialPosition.y + (position.y - cur.startY)));
-      setAppPositions(prev => ({ ...prev, [cur.appId]: { x: newLeft, y: newTop } }));
       if (cur.element) {
         cur.element.style.left = `${newLeft}px`;
         cur.element.style.top  = `${newTop}px`;
       }
+      cur._lastLeft = newLeft;
+      cur._lastTop  = newTop;
     }
 
     // ── Pinch end ────────────────────────────────────────────────────────────
     if (!isPinchingNow && prevIsPinchingRef.current) {
       if (resizeTargetRef.current) {
         const rt = resizeTargetRef.current;
-        const finalSize = appSizes[rt.appId] || { width: rt.initialWidth, height: rt.initialHeight };
+        const finalSize = {
+          width:  rt._lastWidth  ?? rt.initialWidth,
+          height: rt._lastHeight ?? rt.initialHeight
+        };
         const existing = JSON.parse(localStorage.getItem(`smartMirror_${rt.appId}_layout`) || '{}');
         localStorage.setItem(`smartMirror_${rt.appId}_layout`, JSON.stringify({
           position: existing.position || { x: 0, y: 0 },
           size: finalSize
         }));
+        setAppSizes(prev => ({ ...prev, [rt.appId]: finalSize }));
         clearResizeState();
       } else if (dragTargetRef.current) {
         const dt = dragTargetRef.current;
-        const finalPosition = appPositions[dt.appId] || dt.initialPosition;
+        const finalPosition = {
+          x: dt._lastLeft ?? dt.initialPosition.x,
+          y: dt._lastTop  ?? dt.initialPosition.y
+        };
         localStorage.setItem(`smartMirror_${dt.appId}_layout`, JSON.stringify({
           position: { x: finalPosition.x, y: finalPosition.y },
           size: { width: dt.element?.offsetWidth || 300, height: dt.element?.offsetHeight || 200 }
         }));
+        setAppPositions(prev => ({ ...prev, [dt.appId]: finalPosition }));
         clearDragState();
       } else if (pinchStartTimeRef.current) {
         // No drag/resize committed — check for tap/click gesture
@@ -893,7 +909,7 @@ const SmartMirror = () => {
 
       {/* Audio unlock banner */}
       {!assistant.audioUnlocked && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-5 py-1.5 rounded-full text-[10px] uppercase tracking-[0.22em] text-white/25 backdrop-blur-2xl select-none pointer-events-none" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-5 py-1.5 rounded-full text-[10px] uppercase tracking-[0.22em] text-white/25 select-none pointer-events-none" style={{ border: '1px solid rgba(255,255,255,0.06)', background: 'rgba(0,0,0,0.6)' }}>
           Tap anywhere to enable voice
         </div>
       )}
@@ -904,15 +920,15 @@ const SmartMirror = () => {
           assistant.unlockAudio();
           assistant.isOpen ? assistant.endSession() : assistant.open();
         }}
-        className="fixed bottom-6 left-6 z-[1000] rounded-full px-5 py-2 text-[10px] uppercase tracking-[0.2em] text-white/30 backdrop-blur-2xl transition-all duration-200 hover:text-white/60 hover:border-white/20"
-        style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.4)' }}
+        className="fixed bottom-6 left-6 z-[1000] rounded-full px-5 py-2 text-[10px] uppercase tracking-[0.2em] text-white/30 hover:text-white/60"
+        style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.7)' }}
       >
         {assistant.isOpen ? 'Close AI' : 'Open AI'}
       </button>
 
       {/* Active user badge — appears when phone app sets a user */}
       {activeUser && (
-        <div className="fixed top-6 right-6 z-[1000] flex items-center gap-2.5 px-3 py-2 rounded-full backdrop-blur-2xl" style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.5)' }}>
+        <div className="fixed top-6 right-6 z-[1000] flex items-center gap-2.5 px-3 py-2 rounded-full" style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.7)' }}>
           <div
             className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-semibold text-black"
             style={{ backgroundColor: 'var(--mirror-accent-color)' }}
@@ -923,8 +939,8 @@ const SmartMirror = () => {
         </div>
       )}
 
-      {/* Face recognition badge */}
-      {handTrackingEnabled && faceStatus !== 'idle' && (
+      {/* Face recognition badge — only show when face recognition is enabled */}
+      {handTrackingEnabled && generalSettings.faceRecognitionEnabled && faceStatus !== 'idle' && (
         <div
           className="fixed top-6 z-[1000] flex items-center gap-2 px-3 py-2 rounded-full border"
           style={{
@@ -999,10 +1015,10 @@ const SmartMirror = () => {
       {/* Settings Button */}
       <Link
         to="/settings"
-        className="fixed bottom-6 right-6 z-[1000] rounded-full p-3 transition-all duration-300 backdrop-blur-2xl hover:opacity-80"
+        className="fixed bottom-6 right-6 z-[1000] rounded-full p-3 hover:opacity-80"
         style={{
           border: '1px solid rgba(255,255,255,0.08)',
-          background: 'rgba(0,0,0,0.4)',
+          background: 'rgba(0,0,0,0.7)',
           color: 'var(--mirror-accent-color)',
           boxShadow: generalSettings.widgetShadows ? '0 12px 30px var(--mirror-accent-soft)' : 'none'
         }}
@@ -1016,7 +1032,7 @@ const SmartMirror = () => {
       {/* Background Hand Tracking + Face Recognition Service */}
       <HandTrackingService
         onHandPosition={handleHandPosition}
-        onFaceDetected={handTrackingEnabled ? handleFaceDetected : undefined}
+        onFaceDetected={handTrackingEnabled && generalSettings.faceRecognitionEnabled ? handleFaceDetected : undefined}
         settings={getAppSettings('handtracking')}
         enabled={handTrackingEnabled}
       />

@@ -38,6 +38,14 @@ const clampConfidence = (value, fallback = 0.5) => {
 };
 
 const QUALITY_PRESETS = {
+  ultralow: {
+    maxWidth: 160,
+    maxHeight: 120,
+    cameraWidth: 160,
+    cameraHeight: 120,
+    modelComplexity: 0,
+    maxFrameRate: 10
+  },
   low: {
     maxWidth: 320,
     maxHeight: 240,

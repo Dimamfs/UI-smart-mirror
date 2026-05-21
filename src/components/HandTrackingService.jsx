@@ -68,6 +68,9 @@ const HandTrackingService = ({ onHandPosition, onFaceDetected, settings = {}, en
   const faceIntervalRef = useRef(null);
   const onFaceDetectedRef = useRef(onFaceDetected);
   const lastFaceBoxRef = useRef(null);
+  const canvasCtxRef  = useRef(null);
+  const canvasWRef    = useRef(0);
+  const canvasHRef    = useRef(0);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -171,8 +174,6 @@ const HandTrackingService = ({ onHandPosition, onFaceDetected, settings = {}, en
 
   useEffect(() => {
     if (!isEnabled) {
-      // Clean up when disabled
-      console.log('[Camera] isEnabled=false — stopping camera');
       if (cameraRef.current) {
         cameraRef.current.stop();
         cameraRef.current = null;
@@ -250,13 +251,11 @@ const HandTrackingService = ({ onHandPosition, onFaceDetected, settings = {}, en
             height: runtimeConfig.camera.height
           });
 
-          console.log('[Camera] Requesting getUserMedia via MediaPipe Camera...');
           try {
             await cameraInstance.start();
             cameraRef.current = cameraInstance;
-            console.log('[Camera] Camera started successfully');
           } catch (camErr) {
-            console.error('[Camera] camera.start() / getUserMedia failed:', camErr?.name, camErr?.message);
+            console.error('[Camera] start failed:', camErr?.name, camErr?.message);
           }
         }
       } catch (error) {
@@ -267,7 +266,6 @@ const HandTrackingService = ({ onHandPosition, onFaceDetected, settings = {}, en
     initializeHandTracking();
 
     return () => {
-      console.log('[Camera] Effect cleanup — stopping camera (preprocessingQuality or isEnabled changed)');
       if (cameraRef.current) {
         cameraRef.current.stop();
         cameraRef.current = null;
@@ -285,29 +283,45 @@ const HandTrackingService = ({ onHandPosition, onFaceDetected, settings = {}, en
   const onResults = (results) => {
     const canvas = canvasRef.current;
     const video = videoRef.current;
-    
+
     if (!canvas || !video) return;
-    
-    const ctx = canvas.getContext('2d');
-    const w = canvas.width = video.videoWidth;
-    const h = canvas.height = video.videoHeight;
 
-    // Clear canvas
-    ctx.clearRect(0, 0, w, h);
+    const w = video.videoWidth;
+    const h = video.videoHeight;
 
-    // Draw the video frame if preview is enabled
+    const showPrev = showPreviewRef.current;
+
+    if (showPrev) {
+      if (w !== canvasWRef.current || h !== canvasHRef.current) {
+        canvas.width  = w;
+        canvas.height = h;
+        canvasWRef.current = w;
+        canvasHRef.current = h;
+        canvasCtxRef.current = canvas.getContext('2d');
+      }
+      if (!canvasCtxRef.current) {
+        canvasCtxRef.current = canvas.getContext('2d');
+      }
+    }
+
+    const ctx = canvasCtxRef.current;
+
+    if (showPrev && ctx) {
+      ctx.clearRect(0, 0, w, h);
+    }
+
     const currentSettings = settingsRef.current || {};
-    const exposureFilter = getExposureFilterString(currentSettings);
 
-    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    const elapsed = now - fpsRef.current.lastTimestamp;
-    fpsRef.current.lastTimestamp = now;
-    const instantFps = elapsed > 0 ? 1000 / elapsed : 0;
-    fpsRef.current.value =
-      FPS_SMOOTHING * fpsRef.current.value + (1 - FPS_SMOOTHING) * instantFps;
-    const smoothedFps = fpsRef.current.value;
+    if (showPrev && ctx) {
+      const exposureFilter = getExposureFilterString(currentSettings);
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const elapsed = now - fpsRef.current.lastTimestamp;
+      fpsRef.current.lastTimestamp = now;
+      const instantFps = elapsed > 0 ? 1000 / elapsed : 0;
+      fpsRef.current.value =
+        FPS_SMOOTHING * fpsRef.current.value + (1 - FPS_SMOOTHING) * instantFps;
+      const smoothedFps = fpsRef.current.value;
 
-    if (showPreviewRef.current) {
       ctx.save();
       ctx.filter = exposureFilter;
       ctx.drawImage(video, 0, 0, w, h);
@@ -331,7 +345,7 @@ const HandTrackingService = ({ onHandPosition, onFaceDetected, settings = {}, en
       const indexTip = hand[8];
       const pinkyTip = hand[20];
       
-      if (showPreviewRef.current) {
+      if (showPrev && ctx) {
         // Draw hand connections
         drawConnectors(ctx, hand, HAND_CONNECTIONS, {
           color: '#00FF00',
@@ -467,7 +481,7 @@ const HandTrackingService = ({ onHandPosition, onFaceDetected, settings = {}, en
     }
 
     // Draw face bounding box from most recent detection (updated asynchronously)
-    if (showPreviewRef.current && lastFaceBoxRef.current) {
+    if (showPrev && ctx && lastFaceBoxRef.current) {
       const box = lastFaceBoxRef.current;
       const scaleX = w / (videoRef.current?.videoWidth || w);
       const scaleY = h / (videoRef.current?.videoHeight || h);
