@@ -305,11 +305,11 @@ export function useAIAssistant() {
       enabled:           Boolean(rawSettings.enabled),
       apiKey:            (s.apiKey || '').trim(),
       // Chat model — latest gpt-4o family by default
-      chatModel:         s.chatModel || s.model?.includes('realtime') ? 'gpt-4o' : (s.model || 'gpt-4o'),
+      chatModel:         s.chatModel || (s.model?.includes('realtime') ? 'gpt-4o' : (s.model || 'gpt-4o')),
       // Realtime WebRTC model
-      realtimeModel:     s.realtimeModel || 'gpt-4o-realtime-preview-2024-12-17',
+      realtimeModel:     s.realtimeModel || 'gpt-4o-realtime-preview',
       voice:             s.voice || 'alloy',
-      name:              s.name || 'Mirror',
+      name:              s.name || 'Alex',
       elevenLabsKey:     (s.elevenLabsKey || '').trim(),
       elevenLabsVoiceId: (s.elevenLabsVoiceId || '').trim() || 'JBFqnCBsd6RMkjVDRZzb',
     };
@@ -353,7 +353,20 @@ export function useAIAssistant() {
   const ttsAudioRef     = useRef(null);  // ElevenLabs TTS playback
 
   // Speech recognition
-  const recognitionRef  = useRef(null);
+  const recognitionRef    = useRef(null);
+  const lastSpeechMsRef   = useRef(0); // timestamp of last SpeechRecognition result
+  const sessionOpenTimeRef = useRef(0); // timestamp when session last opened
+
+  // VAD + Whisper (Pi fallback when webkitSpeechRecognition has no Google key)
+  const vadEnabledRef   = useRef(false);
+  const vadStreamRef    = useRef(null);
+  const vadACtxRef      = useRef(null);
+  const vadRafRef       = useRef(null);
+  const vadRecorderRef  = useRef(null);
+  const vadChunksRef    = useRef([]);
+  const vadActiveRef    = useRef(false);
+  const vadSilenceRef   = useRef(null);
+  const vadBusyRef      = useRef(false);
 
   // ── Sync refs ─────────────────────────────────────────────────────────
   useEffect(() => { isOpenRef.current  = isOpen;  }, [isOpen]);
@@ -467,6 +480,12 @@ export function useAIAssistant() {
         if (window.speechSynthesis.paused) window.speechSynthesis.resume();
         const utt = new SpeechSynthesisUtterance(text);
         utt.lang = 'en-US';
+        // Pick a real English voice if available (avoids robotic default on Pi)
+        const voices = window.speechSynthesis.getVoices();
+        const eng = voices.find(v => v.lang.startsWith('en') && v.default)
+          || voices.find(v => v.lang.startsWith('en'))
+          || voices[0];
+        if (eng) utt.voice = eng;
         utt.onerror = (e) => console.error('[TTS] SpeechSynthesis error:', e.error);
         window.speechSynthesis.speak(utt);
       }, 50);
@@ -474,9 +493,218 @@ export function useAIAssistant() {
     if (window.speechSynthesis.getVoices().length > 0) {
       go();
     } else {
-      window.speechSynthesis.addEventListener('voiceschanged', go, { once: true });
+      // voiceschanged may never fire on embedded Chromium — add a 600ms timeout fallback
+      let fired = false;
+      const onVoicesChanged = () => { if (!fired) { fired = true; go(); } };
+      window.speechSynthesis.addEventListener('voiceschanged', onVoicesChanged, { once: true });
+      setTimeout(() => { if (!fired) { fired = true; go(); } }, 600);
     }
   }, []);
+
+  // ── VAD + Whisper (Pi wake word fallback) ────────────────────────────
+
+  const transcribeVADChunk = useCallback(async (blob) => {
+    const { apiKey } = cfgRef.current;
+    console.log(`[Whisper] blob ${blob.size} bytes, apiKey=${apiKey ? 'set' : 'MISSING'}`);
+    if (!apiKey) {
+      console.warn('[Whisper] No API key — set one in Settings → AI Assistant');
+      vadBusyRef.current = false;
+      return;
+    }
+    if (blob.size < 500) {
+      console.log('[Whisper] blob too small, skipping');
+      vadBusyRef.current = false;
+      return;
+    }
+    try {
+      const form = new FormData();
+      form.append('file', blob, 'audio.webm');
+      form.append('model', 'whisper-1');
+      form.append('language', 'en');
+      const whisperAbort = new AbortController();
+      const whisperTimer = setTimeout(() => whisperAbort.abort(), 12000);
+      let res;
+      try {
+        res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}` },
+          body: form,
+          signal: whisperAbort.signal,
+        });
+      } finally {
+        clearTimeout(whisperTimer);
+      }
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        console.error(`[Whisper] API error ${res.status}: ${body}`);
+      } else {
+        const { text = '' } = await res.json();
+        const lower = text.trim().toLowerCase();
+        console.log('[Whisper] transcript:', lower || '(empty)');
+        if (lower && Date.now() - lastSpeechMsRef.current > 2000) {
+          speechHandlerRef.current(lower);
+        }
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') console.warn('[Whisper VAD] error:', e.message);
+    }
+    vadBusyRef.current = false;
+  }, []);
+
+  const stopVAD = useCallback(() => {
+    vadEnabledRef.current = false;
+    if (vadRafRef.current) { clearTimeout(vadRafRef.current); vadRafRef.current = null; }
+    if (vadSilenceRef.current) { clearTimeout(vadSilenceRef.current); vadSilenceRef.current = null; }
+    if (vadRecorderRef.current?.state === 'recording') {
+      try { vadRecorderRef.current.stop(); } catch {}
+    }
+    if (vadStreamRef.current) {
+      vadStreamRef.current.getTracks().forEach(t => { try { t.stop(); } catch {} });
+      vadStreamRef.current = null;
+    }
+    if (vadACtxRef.current) {
+      try { vadACtxRef.current.close(); } catch {}
+      vadACtxRef.current = null;
+    }
+    vadChunksRef.current = [];
+    vadActiveRef.current = false;
+  }, []);
+
+  const startVAD = useCallback(async () => {
+    if (vadEnabledRef.current || vadStreamRef.current) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
+      });
+      vadStreamRef.current = stream;
+      vadEnabledRef.current = true;
+
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) throw new Error('No AudioContext support');
+      const ctx = new AC();
+      vadACtxRef.current = ctx;
+
+      // Chromium autoplay policy: AudioContext starts suspended without a user gesture.
+      // getByteFrequencyData returns all-zeros when suspended → RMS always 0 → voice never detected.
+      // Try resume immediately; if it fails, wire a one-shot listener for the next user interaction.
+      const tryResume = () => {
+        if (vadACtxRef.current?.state === 'suspended') {
+          vadACtxRef.current.resume().catch(() => {});
+        }
+      };
+      tryResume();
+      if (ctx.state === 'suspended') {
+        const events = ['click', 'touchstart', 'keydown', 'pointerdown'];
+        const onInteract = () => {
+          tryResume();
+          events.forEach(e => document.removeEventListener(e, onInteract, true));
+        };
+        events.forEach(e => document.addEventListener(e, onInteract, { capture: true, once: true }));
+      }
+
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.4;
+      source.connect(analyser);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+
+      // Calibration aid: log peak RMS every 8 seconds so threshold can be tuned
+      let lastCalLog = 0;
+      let peakRms = 0;
+
+      const THRESHOLD = 10;  // RMS of byte-frequency data; lower = more sensitive
+      const SILENCE_MS = 1400;
+      const MAX_MS = 7000;
+      const TICK_MS = 80;    // setTimeout instead of RAF — RAF is throttled when unfocused on Pi
+
+      const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg'].find(m => {
+        try { return MediaRecorder.isTypeSupported(m); } catch { return false; }
+      }) || '';
+
+      let recStart = 0;
+
+      const makeRec = () => {
+        const r = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+        r.ondataavailable = e => { if (e.data?.size > 0) vadChunksRef.current.push(e.data); };
+        r.onstop = () => {
+          const chunks = [...vadChunksRef.current];
+          vadChunksRef.current = [];
+          if (chunks.length && !vadBusyRef.current && (Date.now() - recStart) >= 300) {
+            vadBusyRef.current = true;
+            transcribeVADChunk(new Blob(chunks, { type: mimeType || 'audio/webm' }));
+          }
+        };
+        return r;
+      };
+
+      vadRecorderRef.current = makeRec();
+
+      const tick = () => {
+        if (!vadEnabledRef.current) return;
+
+        // Skip analysis while AudioContext is not running
+        if (ctx.state !== 'running') {
+          vadRafRef.current = setTimeout(tick, TICK_MS);
+          return;
+        }
+
+        analyser.getByteFrequencyData(data);
+        const rms = Math.sqrt(data.reduce((s, v) => s + v * v, 0) / data.length);
+        if (rms > peakRms) peakRms = rms;
+
+        // Periodic calibration log
+        const now = Date.now();
+        if (now - lastCalLog > 8000) {
+          console.log(`[VAD] ctx=${ctx.state} peakRMS=${peakRms.toFixed(1)} threshold=${THRESHOLD}`);
+          peakRms = 0;
+          lastCalLog = now;
+        }
+
+        const voice = rms > THRESHOLD;
+
+        if (voice) {
+          if (!vadActiveRef.current && vadRecorderRef.current.state === 'inactive' && !vadBusyRef.current) {
+            vadActiveRef.current = true;
+            vadChunksRef.current = [];
+            recStart = Date.now();
+            console.log('[VAD] recording started');
+            try { vadRecorderRef.current.start(200); } catch {}
+          }
+          if (vadSilenceRef.current) { clearTimeout(vadSilenceRef.current); vadSilenceRef.current = null; }
+          if (vadActiveRef.current && (Date.now() - recStart) > MAX_MS) {
+            vadActiveRef.current = false;
+            if (vadRecorderRef.current.state === 'recording') {
+              try { vadRecorderRef.current.stop(); } catch {}
+              vadRecorderRef.current = makeRec();
+            }
+          }
+        } else if (vadActiveRef.current && !vadSilenceRef.current) {
+          vadSilenceRef.current = setTimeout(() => {
+            vadSilenceRef.current = null;
+            if (vadActiveRef.current && vadRecorderRef.current.state === 'recording') {
+              vadActiveRef.current = false;
+              console.log('[VAD] recording stopped → sending to Whisper');
+              try { vadRecorderRef.current.stop(); } catch {}
+              vadRecorderRef.current = makeRec();
+            }
+          }, SILENCE_MS);
+        }
+
+        vadRafRef.current = setTimeout(tick, TICK_MS);
+      };
+
+      vadRafRef.current = setTimeout(tick, TICK_MS);
+      console.log('[VAD] started — ctx state:', ctx.state, '— speak to calibrate');
+    } catch (e) {
+      vadEnabledRef.current = false;
+      if (vadStreamRef.current) {
+        vadStreamRef.current.getTracks().forEach(t => { try { t.stop(); } catch {} });
+        vadStreamRef.current = null;
+      }
+      console.warn('[VAD] Could not start:', e.message);
+    }
+  }, [transcribeVADChunk]);
 
   // ── Volume monitor ────────────────────────────────────────────────────
 
@@ -566,8 +794,12 @@ export function useAIAssistant() {
     setAiText('');
     // Short cooldown so wake word doesn't immediately re-trigger
     cooldownRef.current = true;
-    setTimeout(() => { cooldownRef.current = false; }, 2200);
-  }, [releaseWebRTC, setUiStatus]);
+    setTimeout(() => {
+      cooldownRef.current = false;
+      // Resume VAD wake word listening after session closes
+      startVAD();
+    }, 2200);
+  }, [releaseWebRTC, setUiStatus, startVAD]);
 
   // Wire the indirect ref so resetInactivity can call endSession
   useEffect(() => { endSessionRef.current = endSession; }, [endSession]);
@@ -656,6 +888,8 @@ export function useAIAssistant() {
       pc.onconnectionstatechange = () => {
         const s = pc.connectionState;
         if (s === 'connected') {
+          // WebRTC owns the mic — stop VAD to avoid duplicate Whisper calls
+          stopVAD();
           setUiStatus('listening', 'Listening…');
           resetInactivity();
         } else if (s === 'failed' || s === 'closed') {
@@ -781,12 +1015,37 @@ export function useAIAssistant() {
     } catch (err) {
       console.error('[WebRTC] Failed:', err.message);
       releaseWebRTC();
-      // Fall through to Chat+TTS mode — session stays open, mic commands still work
-      setUiStatus('listening', 'Voice ready (fallback mode)');
+      // Fall through to Chat+TTS mode — restart VAD so mic input still works
+      setUiStatus('listening', 'Listening… (Chat mode)');
       sessionRef.current = true;
       resetInactivity();
+      startVAD(); // VAD provides mic input when WebRTC is unavailable
     }
-  }, [configureRealtimeSession, endSession, releaseWebRTC, resetInactivity, setUiStatus, startVolume]);
+  }, [configureRealtimeSession, endSession, releaseWebRTC, resetInactivity, setUiStatus, startVolume, stopVAD, startVAD]);
+
+  // ── openWithVoice: open UI + start WebRTC (used by tap/button) ────────
+  // Must be defined after startWebRTC to avoid temporal dead zone in deps array.
+
+  const openWithVoice = useCallback(() => {
+    if (isOpenRef.current) return;
+    setIsOpen(true);
+    isOpenRef.current = true;
+    sessionRef.current = true;
+    if (audioCtxRef.current?.state === 'suspended') audioCtxRef.current.resume().catch(() => {});
+    const { enabled } = cfgRef.current;
+    if (!enabled) {
+      setUiStatus('error', '', 'AI assistant is disabled. Enable it in Settings → AI Assistant.');
+      setTimeout(() => endSessionRef.current?.(), 4000);
+      return;
+    }
+    playDing();
+    if (cfgRef.current.elevenLabsKey) {
+      setUiStatus('listening', 'Listening…');
+    } else {
+      startWebRTC();
+    }
+    resetInactivity();
+  }, [playDing, startWebRTC, resetInactivity, setUiStatus]);
 
   // ── Chat + TTS agentic pipeline ───────────────────────────────────────
 
@@ -937,18 +1196,29 @@ export function useAIAssistant() {
   speechHandlerRef.current = (text) => {
     if (cooldownRef.current) return;
 
+    // Whisper adds punctuation ("Hey, Alex." "Thank you.") — strip it before matching
+    const clean = text.replace(/[.,!?;:'"()\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
+
     const { name, enabled } = cfgRef.current;
     const nameLower = (name || 'mirror').toLowerCase();
     const wakeWords = [`hey ${nameLower}`, 'hey mirror'];
-    const isWake = wakeWords.some(w => text.includes(w));
+    const isWake = wakeWords.some(w => clean.includes(w));
     const isClose = ['thank you', 'thanks', 'close', 'stop', 'goodbye', 'bye', 'dismiss']
-      .some(w => text.includes(w));
+      .some(w => clean.includes(w));
 
     if (!isOpenRef.current) {
       // ── Idle: only listen for wake word ──────────────────────────────
       if (!isWake) return;
 
       console.log('[Speech] Wake word →', text);
+      // Unlock AudioContext — wake word detection is not a user gesture,
+      // so we must resume the context before any audio can play.
+      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+        audioCtxRef.current.resume().catch(() => {});
+      } else if (!audioCtxRef.current) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) { try { audioCtxRef.current = new AC(); } catch {} }
+      }
       playDing();
       open();
       sessionRef.current = true;
@@ -978,13 +1248,13 @@ export function useAIAssistant() {
       if (isWake) return;
 
       // Ignore single-word noise
-      if (text.split(/\s+/).length < 2) return;
+      if (clean.split(/\s+/).length < 2) return;
 
       resetInactivity();
 
       // Use Chat+TTS when ElevenLabs is configured, or when WebRTC isn't active
       if (cfgRef.current.elevenLabsKey || !dcRef.current || dcRef.current.readyState !== 'open') {
-        sendChatRef.current(text);
+        sendChatRef.current(clean);
       }
       // When WebRTC is open (and no ElevenLabs), mic stream goes directly to OpenAI
     }
@@ -1008,6 +1278,7 @@ export function useAIAssistant() {
       for (let i = ev.resultIndex; i < ev.results.length; i++) {
         if (!ev.results[i].isFinal) continue;
         const text = ev.results[i][0].transcript.trim().toLowerCase();
+        lastSpeechMsRef.current = Date.now();
         console.log('[Speech]', text);
         speechHandlerRef.current(text);
       }
@@ -1017,7 +1288,9 @@ export function useAIAssistant() {
       console.warn('[Speech] Error:', ev.error);
       if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
         setMicError('Microphone access denied. Allow microphone permissions in your browser.');
+        cancelled = true; // Don't restart — permissions need to be granted first
       }
+      // network / no-speech / audio-capture: onend will fire and restart automatically
     };
 
     rec.onend = () => { if (!cancelled) { try { rec.start(); } catch {} } };
@@ -1051,12 +1324,21 @@ export function useAIAssistant() {
     return () => events.forEach(e => document.removeEventListener(e, unlock, { capture: true }));
   }, []);
 
+  // ── Start VAD on mount (works silently if mic already permitted) ──────
+  useEffect(() => {
+    // Try immediately — succeeds if permission was previously granted
+    startVAD();
+    return () => stopVAD();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Cleanup on unmount ────────────────────────────────────────────────
   useEffect(() => {
     return () => {
       if (inactivityRef.current) clearTimeout(inactivityRef.current);
       if (abortRef.current) abortRef.current.abort();
       releaseWebRTC();
+      stopVAD();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1097,9 +1379,11 @@ export function useAIAssistant() {
     remoteAudioRef,
     // Actions
     open,
+    openWithVoice,
     endSession,
     sendText,
     unlockAudio,
+    startVAD,
     clearHistory: () => { setHistory([]); localStorage.removeItem(HISTORY_KEY); },
   };
 }

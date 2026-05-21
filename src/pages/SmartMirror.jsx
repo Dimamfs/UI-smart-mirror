@@ -104,10 +104,12 @@ const SmartMirror = () => {
   const [welcomeFadingOut, setWelcomeFadingOut] = useState(false);
 
   useEffect(() => {
-    if (_mirrorWelcomeShown) return;
-    _mirrorWelcomeShown = true;
+    if (!welcomeVisible) return;
     const fadeTimer = setTimeout(() => setWelcomeFadingOut(true), 2500);
-    const hideTimer = setTimeout(() => setWelcomeVisible(false), 3200);
+    const hideTimer = setTimeout(() => {
+      setWelcomeVisible(false);
+      _mirrorWelcomeShown = true;
+    }, 3200);
     return () => { clearTimeout(fadeTimer); clearTimeout(hideTimer); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -914,11 +916,17 @@ const SmartMirror = () => {
         </div>
       )}
 
-      {/* Open AI button */}
+      {/* Open AI button — also starts VAD wake word listening on first click */}
       <button
         onClick={() => {
           assistant.unlockAudio();
-          assistant.isOpen ? assistant.endSession() : assistant.open();
+          // Ensure VAD is running so wake word works after this gesture grants mic
+          assistant.startVAD();
+          if (assistant.isOpen) {
+            assistant.endSession();
+          } else {
+            assistant.openWithVoice();
+          }
         }}
         className="fixed bottom-6 left-6 z-[1000] rounded-full px-5 py-2 text-[10px] uppercase tracking-[0.2em] text-white/30 hover:text-white/60"
         style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.7)' }}
