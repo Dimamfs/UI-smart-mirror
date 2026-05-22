@@ -144,7 +144,7 @@ function useSpotifyStatus() {
   })
 
   const load = useCallback(async () => {
-    const url = `${API_URL}/api/mirrors/${encodeURIComponent(mirrorId)}/spotify/player`
+    const url = `${API_URL}/api/mirrors/spotify/player?mid=${encodeURIComponent(mirrorId)}`
     console.log('[Spotify] polling:', url)
     try {
       const data = await fetchJson(url)
@@ -401,11 +401,11 @@ export default function SpotifyGlassCard() {
       setPendingAction(action)
       try {
         await fetchJson(
-          `${API_URL}/api/mirrors/${encodeURIComponent(mirrorId)}/spotify/control`,
+          `${API_URL}/api/mirrors/spotify/control`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action }),
+            body: JSON.stringify({ action, mid: mirrorId }),
           },
         )
         await reload()

@@ -23,7 +23,7 @@ const DEFAULT_PROFILE = {
   preferences: { units: 'celsius', newsSources: ['bbc', 'trt'], language: 'en' },
 };
 
-const POLL_MS = 5000;
+const POLL_MS = 2000;
 
 // ── Context ───────────────────────────────────────────────────────────────────
 const ProfileContext = createContext({
@@ -35,12 +35,34 @@ const ProfileContext = createContext({
 
 // ── Provider ──────────────────────────────────────────────────────────────────
 export const ProfileProvider = ({ children }) => {
-  const mirrorId                          = backendApi.getMirrorId();
+  const [mirrorId, setMirrorId]           = useState(() => backendApi.getMirrorId());
   const [activeProfile, setActiveProfile] = useState(DEFAULT_PROFILE);
   const [isLoading, setIsLoading]         = useState(true);
   const [lastSynced, setLastSynced]       = useState(null);
   const prevProfileIdRef                  = useRef(null);
   const prevSettingsHashRef               = useRef(null);
+
+  // Resolve the real mirror public key from the sync bridge.
+  // Retries every 2 s until the bridge is online and returns the key,
+  // so a slow bridge startup doesn't leave us stuck with a random UUID.
+  useEffect(() => {
+    let timer;
+    const fetchKey = () => {
+      fetch('http://localhost:4002/status', { cache: 'no-store' })
+        .then(r => r.json())
+        .then(data => {
+          if (data.mirrorPublicKey) {
+            localStorage.setItem('smartMirrorId', data.mirrorPublicKey);
+            setMirrorId(data.mirrorPublicKey);
+          } else {
+            timer = setTimeout(fetchKey, 2000);
+          }
+        })
+        .catch(() => { timer = setTimeout(fetchKey, 2000); });
+    };
+    fetchKey();
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     console.log('[ProfileContext] Mirror ID:', mirrorId);

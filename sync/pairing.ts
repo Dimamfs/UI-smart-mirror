@@ -135,10 +135,11 @@ export class PairingSession extends EventEmitter {
     if (!this.keypair) return;
     this.stop(); // detach all listeners before emitting
 
-    const sharedSecret = await deriveSharedSecret(
-      this.keypair.privateKey,
-      msg.phone_public_key,
-    );
+    // Only derive a shared secret if the phone actually sent its public key.
+    // The Flutter app omits phonePublicKey, so skip rather than crash libsodium.
+    const sharedSecret = msg.phone_public_key
+      ? await deriveSharedSecret(this.keypair.privateKey, msg.phone_public_key)
+      : '';
 
     const identity: Identity = {
       privateKey:     this.keypair.privateKey,

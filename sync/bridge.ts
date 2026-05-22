@@ -52,9 +52,10 @@ export function startBridge(): http.Server {
     if (req.method === 'GET' && url === '/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
-        phase:   getPhase(),
-        state:   getState(),
-        version: null,
+        phase:          getPhase(),
+        state:          getState(),
+        version:        null,
+        mirrorPublicKey: getMirrorPublicKey(),
       }));
       return;
     }

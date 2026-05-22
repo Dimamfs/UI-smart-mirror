@@ -36,25 +36,17 @@ const useActiveUser = () => {
   }, []);
 
   // Poll backend for the profile the phone app last activated.
-  // Mirror identifies itself by its UUID — no login required.
+  // getMirrorId() is called inside poll() so it picks up the public key
+  // once ProfileContext has written it to localStorage (async on mount).
   useEffect(() => {
-    const mirrorId = backendApi.getMirrorId();
-    if (!mirrorId) {
-      console.warn('[useActiveUser] No mirror ID available — polling disabled.');
-      return;
-    }
-    console.log('[useActiveUser] Starting poll loop for Mirror ID:', mirrorId);
-
     const poll = async () => {
+      const mirrorId = backendApi.getMirrorId();
+      if (!mirrorId) return;
       const profile = await backendApi.getActiveUser(mirrorId);
 
-      // Snapshot current phone profiles before any mutation.
       const { profiles: currentProfiles } = getUsers();
       const phoneProfiles = currentProfiles.filter(p => p.source === 'phone');
       const localProfiles = currentProfiles.filter(p => p.source !== 'phone');
-
-      console.log('[useActiveUser] Previous phone profiles:', phoneProfiles.map(p => p.name));
-      console.log('[useActiveUser] Backend returned profile:', profile);
 
       // ── Case 1: no active user (deleted or never set) ──────────────────────
       if (!profile) {

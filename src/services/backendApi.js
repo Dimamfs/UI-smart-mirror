@@ -84,7 +84,7 @@ export const backendApi = {
    * No login needed — mirror identifies itself by its UUID.
    */
   getActiveUser: async (mirrorId) => {
-    const url = `${API_URL}/api/mirrors/active-user/${mirrorId}`;
+    const url = `${API_URL}/api/mirrors/active-user?mid=${encodeURIComponent(mirrorId)}`;
     try {
       console.log('[Mirror] Polling:', url);
       const res = await fetch(url);
@@ -125,7 +125,7 @@ export const backendApi = {
    * Returns a normalized activeProfile object or null.
    */
   getActiveProfile: async (mirrorId) => {
-    const url = `${API_URL}/api/mirrors/active-user/${mirrorId}`;
+    const url = `${API_URL}/api/mirrors/active-user?mid=${encodeURIComponent(mirrorId)}`;
     try {
       console.log('[Profile] Polling:', url, '| mirrorId:', mirrorId);
       const res = await fetch(url);

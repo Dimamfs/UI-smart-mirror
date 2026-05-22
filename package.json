@@ -43,9 +43,12 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject",
     "sync:dev": "cross-env MIRROR_BACKEND_URL=ws://localhost:4000 ts-node --project tsconfig.sync.json sync/server.ts",
+    "sync:mirror": "ts-node --project tsconfig.sync.json sync/server.ts",
     "sync:build": "tsc --project tsconfig.sync.json",
     "sync:start": "node sync/dist/server.js",
-    "mock-backend": "ts-node --project tsconfig.sync.json sync/mock-backend.ts"
+    "mock-backend": "ts-node --project tsconfig.sync.json sync/mock-backend.ts",
+    "backend:start": "node backend/server.js",
+    "backend:dev": "node --watch backend/server.js"
   },
   "eslintConfig": {
     "extends": [

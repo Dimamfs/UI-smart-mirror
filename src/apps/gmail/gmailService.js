@@ -234,7 +234,7 @@ export async function fetchGmailStatusForMirror({ mirrorId } = {}) {
     return { ...MOCK_STATUS };
   }
 
-  const url = `${BASE_URL}/api/mirrors/${encodeURIComponent(mirrorId)}/gmail/status`;
+  const url = `${BASE_URL}/api/mirrors/gmail/status?mid=${encodeURIComponent(mirrorId)}`;
   console.log('[GmailService] Fetching Gmail status for mirror:', url);
   const raw = await fetchJson(url);
   console.log('[GmailService] Gmail status raw response:', raw);
@@ -260,7 +260,7 @@ export async function fetchGmailMessagesForMirror({ mirrorId, limit = 5 } = {}) 
     };
   }
 
-  const url = `${BASE_URL}/api/mirrors/${encodeURIComponent(mirrorId)}/gmail/messages${buildQuery({ limit })}`;
+  const url = `${BASE_URL}/api/mirrors/gmail/messages?mid=${encodeURIComponent(mirrorId)}&${buildQuery({ limit }).replace(/^\?/, '')}`;
   console.log('[GmailService] Fetching Gmail messages for mirror:', url);
   const raw = await fetchJson(url);
   console.log('[GmailService] Gmail messages raw response:', raw);
